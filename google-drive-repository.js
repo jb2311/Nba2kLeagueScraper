@@ -1,16 +1,17 @@
 const {google} = require('googleapis');
 const fs = require('fs');
 const readline = require('readline');
+const rp = require('request-promise');
 
-const SCOPES = ['https://www.googleapis.com/auth/drive.file'];
+const SCOPES = ['https://www.googleapis.com/auth/drive'];
 const TOKEN_PATH = './credentials.json';
 
 
-function promptLogin(csv){
+async function promptLogin(boxScoreData){
   fs.readFile('./google-client-id.json', (err, content) => {
   if (err) return console.log('Error loading client secret file:', err);
   // Authorize a client with credentials, then call the Google Drive API.
-  authorize(JSON.parse(content), uploadSheet, csv);
+  authorize(JSON.parse(content), uploadSheet, boxScoreData);
   });
 }
 function authorize(credentials, callback, csv) {
@@ -49,15 +50,55 @@ function getAccessToken(oAuth2Client, callback) {
     });
   });
 }
-function uploadSheet(auth, csv) {
-  const drive = google.drive({version: 'v3', auth});
+function GetFileName(boxScoreData){
+  return boxScoreData.awayTeamName + ' vs ' + boxScoreData.homeTeamName + ' - ' + boxScoreData.dateTime;
+}
+ 
+async function getFolderList(drive){
+  var response = await  drive.files.list({
+      q: "mimeType='application/vnd.google-apps.folder' AND name = '" + new Date().toDateString() +"'"
+    });
+  return response.data.files;
+}
+
+async function getFolderId(drive){
+  var folders =  await getFolderList(drive);
+
+  if(folders.length > 0){
+    return folders[0].id;
+  }
+
+  var id;
   var fileMetadata = {
-    'name': 'test',
-    'mimeType': 'application/vnd.google-apps.spreadsheet'
+    'name': new Date().toDateString(),
+    'mimeType': 'application/vnd.google-apps.folder'
+  };
+  drive.files.create({
+    resource: fileMetadata,
+    fields: 'id'
+  }, function (err, file) {
+    if (err) {
+      // Handle error
+      console.error(err);
+    } else {
+     id = file.data.id;
+    }
+  });
+  return id;
+}
+async function uploadSheet(auth, boxScoreData) {
+  const drive = google.drive({version: 'v3', auth});
+  
+  var folderId = await getFolderId(drive);
+
+  var fileMetadata = {
+    'name': GetFileName(boxScoreData),
+    'mimeType': 'application/vnd.google-apps.spreadsheet',
+    parents: [folderId]
   };
   var media = {
     mimeType: 'text/csv',
-    body: csv
+    body: boxScoreData.csv
   };
   drive.files.create({
     resource: fileMetadata,
@@ -68,7 +109,7 @@ function uploadSheet(auth, csv) {
       // Handle error
       console.error(err);
     } else {
-      console.log('File Id:', file.id);
+      console.log('File Id:', file.data.id);
     }
   });
 }

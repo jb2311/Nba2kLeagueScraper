@@ -2,15 +2,10 @@ const rp = require('request-promise');
 const cheerio = require('cheerio');
 const arrayToCsv = require('array-to-csv');
 const drive = require('./google-drive-repository')
+const nodeCache = require( "node-cache" );
+const cache = new nodeCache({checkperiod: 604800});
 
 
-// cheerioTableparser = require('cheerio-tableparser');
-const options = {
-  uri: `https://2kleague.nba.com/game/bucks-gaming-vs-76ers-gc-5-11-2018/`,
-  transform: function (body) {
-    return cheerio.load(body);
-  }
-};
 
 function findTable($, tableName) {
   return $('.' + tableName + ' tr'); //'.table.table.home-players tr'
@@ -34,26 +29,78 @@ function parseTable($, htmlTable){
 
   return parsedTable;
 }
+function findTeamName($, className){
+  return $('.'+ className).text();
+}
 
-rp(options)
-  .then(($) => {
-    var homeTableHtml = findTable($,'table.home-players')
-    var homeTable = parseTable($, homeTableHtml);
+async function scrapeUrl(url){
+  var html =  await rp(url); 
 
-    var awayTableHtml = findTable($,'table.away-players')
-    var awayTable = parseTable($, awayTableHtml);
+  return cheerio.load(html);
+}
 
-    var homeCsv = arrayToCsv(homeTable);
-    homeCsv = 'Name' + homeCsv;
+function getBoxScore($){
+  var homeTableHtml = findTable($,'table.home-players') // TODO: put into config
+  var homeTable = parseTable($, homeTableHtml);
 
-    var awayCsv = arrayToCsv(awayTable);
-    awayCsv = 'Name' + awayCsv;
+  var awayTableHtml = findTable($,'table.away-players')
+  var awayTable = parseTable($, awayTableHtml);
 
-    var csv = homeCsv + ',\n' + awayCsv;
+  var homeTeamName = findTeamName($, 'game-banner__name.home-team__name');
+  var awayTeamName = findTeamName($, 'game-banner__name.away-team__name');
 
-    drive.promptLogin(csv);
-  })
-  .catch((err) => {
-    console.log(err);
+  var homeCsv = arrayToCsv(homeTable);
+  homeCsv = 'Name' + homeCsv;
+
+  var awayCsv = arrayToCsv(awayTable);
+  awayCsv = 'Name' + awayCsv;
+
+  var csv = homeCsv + ',\n' + awayCsv;
+
+  return boxScoreData = {homeTeamName: homeTeamName, awayTeamName: awayTeamName, csv: csv, dateTime: new Date().toDateString()}
+}
+
+async function getUrls(){
+  var $ = await scrapeUrl("https://2kleague.nba.com/schedule/");
+
+  var scheduleBlocks = $('.schedule-block');
+  var scheduleBlock;
+  var date = new Date();
+      scheduleBlocks.each((i, v) =>{
+    if(new Date($(v).find('.schedule-block__header').first().children().first().text()).toDateString() 
+      == date.toDateString()){
+      scheduleBlock = v;
+    }
   });
+
+  var urls = [];
+
+  if(scheduleBlock){
+    var games = $(scheduleBlock).find('.schedule-block__game');
+    games.each((i, v) => {
+      if($(v).find('.game-status').text() == 'Final'){
+        var url = $(v).find('.schedule-block__team').first().attr('href');
+        var cachedResult = cache.get(url);
+        if(!cachedResult){
+          cache.set(url, true);
+          urls.push(url);
+        }
+      }
+    });
+  }
+
+  return urls;
+}
+async function run(){
+  var urls = await getUrls();
+  var boxScores = [];
+  urls.forEach(async(url) => {
+    var $ = await scrapeUrl(url);
+    boxScores.push(getBoxScore($));
+    drive.promptLogin(boxScoreData);
+  });
+
+  setTimeout(await run, 3600000)
+}
+run();
   
